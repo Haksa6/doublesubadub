@@ -29,6 +29,7 @@
   const webvttCache = new Map(); // from 'movieID/trackID' to blob
   let urlMovieId; // this is mis-named now, it's pulled from the HTML
   let selectedTrackId;
+  let selectedTrackId2; // New secondary track
   let showSubsState = true;
 
   let targetSubsList = null;
@@ -36,6 +37,7 @@
 
   let targetTrackBlob = null;
   let displayedTrackBlob = null;
+  let displayedTrackBlob2 = null;
 
   // Convert WebVTT text to plain text plus "simple" tags (allowed in SRT)
   const TAG_REGEX = RegExp('</?([^>]*)>', 'ig');
@@ -125,36 +127,50 @@
     }
     return matchingTracks[0];
   }
+  function getSelectedTrackInfo2() {
+    if (!urlMovieId || !selectedTrackId2) {
+      throw new Error('Internal error, getSelectedTrackInfo2 called but urlMovieId or selectedTrackId2 is null');
+    }
+    const trackList = trackListCache.get(urlMovieId);
+    const matchingTracks = trackList.filter(el => el.id === selectedTrackId2);
+    if (matchingTracks.length !== 1) {
+      throw new Error('internal error, no matching track id');
+    }
+    return matchingTracks[0];
+  }
 
-  function handleSubsListSetOrChange(selectElem) {
+  function handleSubsListSetOrChange(selectElem, isPrimary = true) {
     const trackId = selectElem.value;
-    // console.log('selecting track', trackId);
-
-    selectedTrackId = trackId;
-
-    if (!selectedTrackId) {
+    
+    if (isPrimary) {
+      selectedTrackId = trackId;
+    } else {
+      selectedTrackId2 = trackId;
+    }
+  
+    if ((!isPrimary && !selectedTrackId2) || (isPrimary && !selectedTrackId)) {
       return;
     }
-
-    const cacheKey = urlMovieId + '/' + selectedTrackId;
+  
+    const trackIdToUse = isPrimary ? selectedTrackId : selectedTrackId2;
+    const cacheKey = urlMovieId + '/' + trackIdToUse;
+    
     if (!webvttCache.has(cacheKey)) {
-      const trackInfo = getSelectedTrackInfo();
+      const trackInfo = isPrimary ? getSelectedTrackInfo() : getSelectedTrackInfo2();
       const url = trackInfo.bestUrl;
-
+  
       fetch(url).then(function(response) {
         if (response.ok) {
           return response.blob();
         }
         throw new Error('Bad response to WebVTT request');
       }).then(function(blob) {
-        webvttCache.set(cacheKey, new Blob([blob], {type: 'text/vtt'})); // set type to avoid warning
+        webvttCache.set(cacheKey, new Blob([blob], {type: 'text/vtt'}));
         renderAndReconcile();
       }).catch(function(error) {
         console.error('Failed to fetch WebVTT file', error.message);
       });
     }
-
-    // NOTE: We don't call renderAndReconcile here, caller should do it to avoid recursive loop bug
   }
 
   function enableDownloadButton() {
@@ -257,66 +273,88 @@
         showSubsState = !showSubsState;
         updateToggleDisplay();
       }, false);
-
+  
+      // Primary subtitle selector
       const selectElem = document.createElement('select');
       selectElem.style.cssText = 'color: black; margin: 5px';
       selectElem.addEventListener('change', function(e) {
-        handleSubsListSetOrChange(e.target);
+        handleSubsListSetOrChange(e.target, true);
         renderAndReconcile();
       }, false);
-
+  
+      // Secondary subtitle selector
+      const select2Elem = document.createElement('select');
+      select2Elem.style.cssText = 'color: black; margin: 5px';
+      select2Elem.addEventListener('change', function(e) {
+        handleSubsListSetOrChange(e.target, false);
+        renderAndReconcile();
+      }, false);
+  
+      // Add "None" option for second subtitle
+      const noneOption = document.createElement('option');
+      noneOption.value = "";
+      noneOption.textContent = "None";
+      select2Elem.appendChild(noneOption);
+  
       let firstCCTrackId;
+      // Add options to both selectors
       for (const track of tracks) {
+        // Add to primary selector
         const optElem = document.createElement('option');
         optElem.value = track.id;
         optElem.textContent = track.languageDescription + (track.isClosedCaptions ? ' [CC]' : '');
-        selectElem.appendChild(optElem);
-
+        selectElem.appendChild(optElem.cloneNode(true));
+        
+        // Add to secondary selector
+        select2Elem.appendChild(optElem);
+  
         if (track.isClosedCaptions && !firstCCTrackId) {
           firstCCTrackId = track.id;
         }
       }
+      
       if (firstCCTrackId) {
         selectElem.value = firstCCTrackId;
       }
-
+  
       const downloadButtonElem = document.createElement('button');
       downloadButtonElem.id = DOWNLOAD_BUTTON_ID;
       downloadButtonElem.textContent = 'Download SRT';
       downloadButtonElem.style.cssText = 'margin: 5px; border: none';
       downloadButtonElem.addEventListener('click', function(e) {
         e.preventDefault();
-        // console.log('download click');
         downloadSRT();
       }, false);
-
+  
       const panelElem = document.createElement('div');
       panelElem.style.cssText = 'position: absolute; z-index: 1000; top: 0; right: 0; font-size: 16px; color: white; pointer-events: auto';
       panelElem.appendChild(toggleDisplayButtonElem);
       panelElem.appendChild(selectElem);
+      panelElem.appendChild(select2Elem);
       panelElem.appendChild(downloadButtonElem);
-
+  
       const containerElem = document.createElement('div');
       containerElem.id = SUBS_LIST_ELEM_ID;
       containerElem.style.cssText = 'width: 100%; height: 100%; position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none';
       containerElem.appendChild(panelElem);
-
+  
       document.body.appendChild(containerElem);
-
+  
       updateToggleDisplay();
       disableDownloadButton();
-
-      handleSubsListSetOrChange(selectElem);
+  
+      handleSubsListSetOrChange(selectElem, true);
+      handleSubsListSetOrChange(select2Elem, false);
     }
-
+  
     function removeSubsList() {
       const el = document.getElementById(SUBS_LIST_ELEM_ID);
       if (el) {
         el.remove();
       }
     }
-
-    function addTrackElem(videoElem, blob, srclang) {
+  
+    function addTrackElem(videoElem, blob, blob2, srclang, srclang2) {
       const trackElem = document.createElement('track');
       trackElem.id = TRACK_ELEM_ID;
       trackElem.src = URL.createObjectURL(blob);
@@ -324,100 +362,136 @@
       trackElem.default = true;
       trackElem.srclang = srclang;
       videoElem.appendChild(trackElem);
-      trackElem.track.mode = 'hidden'; // this can only be set after appending
-
+      trackElem.track.mode = 'hidden';
+  
+      // Second track if provided
+      let trackElem2;
+      if (blob2) {
+        trackElem2 = document.createElement('track');
+        trackElem2.id = TRACK_ELEM_ID + '2';
+        trackElem2.src = URL.createObjectURL(blob2);
+        trackElem2.kind = 'subtitles';
+        trackElem2.srclang = srclang2;
+        videoElem.appendChild(trackElem2);
+        trackElem2.track.mode = 'hidden';
+      }
+  
       trackElem.addEventListener('load', function() {
         enableDownloadButton();
       }, false);
-
+  
       const customSubsElem = document.createElement('div');
       customSubsElem.id = CUSTOM_SUBS_ELEM_ID;
       customSubsElem.style.cssText = 'position: absolute; bottom: 20vh; left: 0; right: 0; color: white; font-size: 3vw; text-align: center; user-select: text; -moz-user-select: text; z-index: 100; pointer-events: none';
-
-      trackElem.addEventListener('cuechange', function(e) {
-        // Remove all children
+  
+      function updateSubtitles() {
         while (customSubsElem.firstChild) {
           customSubsElem.removeChild(customSubsElem.firstChild);
         }
-
-        const track = e.target.track;
-        // console.log('active now', track.activeCues);
-        for (const cue of track.activeCues) {
-          const cueElem = document.createElement('div');
-          cueElem.style.cssText = 'background: rgba(0,0,0,0.8); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto';
-          cueElem.innerHTML = vttTextToSimple(cue.text, true); // may contain simple tags like <i> etc.
-          customSubsElem.appendChild(cueElem);
+  
+        // Handle primary track
+        if (trackElem.track.activeCues) {
+          for (const cue of trackElem.track.activeCues) {
+            const cueElem = document.createElement('div');
+            cueElem.style.cssText = 'background: rgba(0,0,0,0.8); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto';
+            cueElem.innerHTML = vttTextToSimple(cue.text, true);
+            customSubsElem.appendChild(cueElem);
+          }
         }
-      }, false);
-
-      // Appending this to the player rather than the document changes details of behavior.
+  
+        // Handle secondary track
+        if (trackElem2 && trackElem2.track.activeCues) {
+          for (const cue of trackElem2.track.activeCues) {
+            const cueElem = document.createElement('div');
+            cueElem.style.cssText = 'background: rgba(0,0,0,0.8); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto; color: #ffff00;';
+            cueElem.innerHTML = vttTextToSimple(cue.text, true);
+            customSubsElem.appendChild(cueElem);
+          }
+        }
+      }
+  
+      trackElem.addEventListener('cuechange', updateSubtitles);
+      if (trackElem2) {
+        trackElem2.addEventListener('cuechange', updateSubtitles);
+      }
+  
       const playerElem = document.querySelector('.watch-video');
       if (!playerElem) {
         throw new Error("Couldn't find player element to append subtitles to");
       }
       playerElem.appendChild(customSubsElem);
-
+  
       updateToggleDisplay();
     }
-
+  
     function removeTrackElem() {
       const trackElem = document.getElementById(TRACK_ELEM_ID);
       if (trackElem) {
         trackElem.remove();
       }
-
+  
+      const trackElem2 = document.getElementById(TRACK_ELEM_ID + '2');
+      if (trackElem2) {
+        trackElem2.remove();
+      }
+  
       const customSubsElem = document.getElementById(CUSTOM_SUBS_ELEM_ID);
       if (customSubsElem) {
         customSubsElem.remove();
       }
-
+  
       disableDownloadButton();
     }
-
+  
     // Determine what subs list should be
     if (urlMovieId && (document.readyState === 'complete') && trackListCache.has(urlMovieId)) {
       targetSubsList = trackListCache.get(urlMovieId);
     } else {
       targetSubsList = null;
     }
-
+  
     // Reconcile DOM if necessary
     if (targetSubsList !== displayedSubsList) {
-      // console.log('updating subs list DOM', targetSubsList, displayedSubsList);
-
       removeSubsList();
       if (targetSubsList) {
         addSubsList(targetSubsList);
       }
-
       displayedSubsList = targetSubsList;
     }
-
-    // Determine what subs blob should be
+  
+    // Determine what subs blobs should be
     const videoElem = document.querySelector('video');
-    if (urlMovieId && selectedTrackId && videoElem) {
-      const cacheKey = urlMovieId + '/' + selectedTrackId;
-      if (webvttCache.has(cacheKey)) {
-        targetTrackBlob = webvttCache.get(cacheKey);
-      } else {
-        targetTrackBlob = null;
+    let targetTrackBlob = null;
+    let targetTrackBlob2 = null;
+  
+    if (urlMovieId && videoElem) {
+      if (selectedTrackId) {
+        const cacheKey = urlMovieId + '/' + selectedTrackId;
+        if (webvttCache.has(cacheKey)) {
+          targetTrackBlob = webvttCache.get(cacheKey);
+        }
       }
-    } else {
-      targetTrackBlob = null;
+      
+      if (selectedTrackId2) {
+        const cacheKey2 = urlMovieId + '/' + selectedTrackId2;
+        if (webvttCache.has(cacheKey2)) {
+          targetTrackBlob2 = webvttCache.get(cacheKey2);
+        }
+      }
     }
-
+  
     // Reconcile DOM if necessary
-    if (targetTrackBlob !== displayedTrackBlob) {
-      // console.log('need to update track blob', targetTrackBlob, displayedTrackBlob);
-
+    if (targetTrackBlob !== displayedTrackBlob || targetTrackBlob2 !== displayedTrackBlob2) {
       removeTrackElem();
-      if (targetTrackBlob) {
-        // NOTE: super hacky to get the language code this way
-        const languageCode = getSelectedTrackInfo().language;
-        addTrackElem(videoElem, targetTrackBlob, languageCode);
+      
+      if (targetTrackBlob || targetTrackBlob2) {
+        const languageCode = selectedTrackId ? getSelectedTrackInfo().language : null;
+        const languageCode2 = selectedTrackId2 ? getSelectedTrackInfo2().language : null;
+        addTrackElem(videoElem, targetTrackBlob, targetTrackBlob2, languageCode, languageCode2);
       }
-
+  
       displayedTrackBlob = targetTrackBlob;
+      displayedTrackBlob2 = targetTrackBlob2;
     }
   }
 
