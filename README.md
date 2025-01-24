@@ -5,11 +5,12 @@ Doublesubadub is a browser extension for Chrome and Firefox that enhances Netfli
 - Subtitles are displayed as selectable text, so you can copy+paste them to make flash cards and look up words in a dictionary (e.g. using the Yomichan or Rikaikun extensions for Japanese)
 - Full subtitles for a video can be downloaded in SRT format for personal study/review
 
-
-
 # Changes
+
 - There are subtitles for the target language and the native language. (Double subtitles)
+- Keyshortcuts for A and D. Pressing "A" rewinds the video and goes to the previous subtitle. Pressing "D" goes forward to the next subtitle in the video.
 
 # Things to do
+
 - Add Anki Integration
 - Record an unknown word with a screenshot to Anki
